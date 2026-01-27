@@ -5,7 +5,8 @@ import { Activity, Droplets, Power, AlertTriangle, CheckCircle, RefreshCcw } fro
 import WaterTank from './WaterTank';
 
 // Connect to backend
-const socket = io('http://localhost:5000');
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const socket = io(API_URL);
 
 const StatsCard = ({ title, value, subtext, icon: Icon, color }) => (
     <div className="glass-panel p-4 flex flex-col justify-between" style={{ minHeight: '140px' }}>
@@ -52,7 +53,7 @@ const Dashboard = () => {
             }
         });
 
-        fetch('http://localhost:5000/api/history')
+        fetch(`${API_URL}/api/history`)
             .then(res => res.json())
             .then(data => {
                 const formatData = data.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
@@ -69,7 +70,7 @@ const Dashboard = () => {
 
     const toggleMotor = () => {
         setMotorOn(!motorOn);
-        fetch('http://localhost:5000/api/motor', {
+        fetch(`${API_URL}/api/motor`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ state: !motorOn })
@@ -77,7 +78,7 @@ const Dashboard = () => {
     };
 
     const resetSystem = () => {
-        fetch('http://localhost:5000/api/reset', { method: 'POST' });
+        fetch(`${API_URL}/api/reset`, { method: 'POST' });
         setHistory([]);
         setData({ percentage: 0, level: 100 });
     };
