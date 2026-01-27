@@ -24,14 +24,33 @@ const StatsCard = ({ title, value, subtext, icon: Icon, color }) => (
 );
 
 const Dashboard = () => {
-    const [data, setData] = useState({ level: 0, percentage: 0 });
+    const [data, setData] = useState({ level: 100, percentage: 0 });
     const [history, setHistory] = useState([]);
     const [motorOn, setMotorOn] = useState(false);
+    const [isConnected, setIsConnected] = useState(false);
+    const [isDemoMode, setIsDemoMode] = useState(false);
     const TANK_CAPACITY = 1000; // Liters
 
     useEffect(() => {
+        const onConnect = () => {
+            setIsConnected(true);
+            setIsDemoMode(false);
+        };
+        const onDisconnect = () => {
+            setIsConnected(false);
+            // If disconnected for more than 3 seconds, offer/switch to demo mode
+            setTimeout(() => {
+                if (!socket.connected) setIsDemoMode(true);
+            }, 3000);
+        };
+
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+        if (socket.connected) setIsConnected(true);
+
         socket.on('new_reading', (reading) => {
             setData(reading);
+            setIsDemoMode(false); // Real data received
             setHistory(prev => {
                 const newHistory = [...prev, { ...reading, time: new Date(reading.timestamp).toLocaleTimeString() }];
                 return newHistory.slice(-20); // Keep last 20
@@ -43,10 +62,9 @@ const Dashboard = () => {
         });
 
         socket.on('history_data', (hist) => {
-            // Handle full history replace (e.g. on reset)
             if (hist.length === 0) {
                 setHistory([]);
-                setData({ level: 100, percentage: 0 }); // Visual reset
+                setData({ level: 100, percentage: 0 });
             } else {
                 const formatData = hist.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
                 setHistory(formatData);
@@ -59,14 +77,54 @@ const Dashboard = () => {
                 const formatData = data.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
                 setHistory(formatData);
                 if (formatData.length > 0) setData(formatData[formatData.length - 1]);
+            })
+            .catch(() => {
+                console.log("Backend offline, switching to demo mode simulation.");
+                setIsDemoMode(true);
             });
 
         return () => {
+            socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
             socket.off('new_reading');
             socket.off('motor_update');
             socket.off('history_data');
         };
     }, []);
+
+    // Frontend Simulation Fallback (for Vercel/Demo)
+    useEffect(() => {
+        let simInterval;
+        if (motorOn && (isDemoMode || !isConnected)) {
+            simInterval = setInterval(() => {
+                setData(prev => {
+                    const newPerc = Math.min(prev.percentage + 0.5, 100);
+                    const newReading = {
+                        level: 100 - newPerc,
+                        percentage: parseFloat(newPerc.toFixed(1)),
+                        timestamp: new Date().toISOString()
+                    };
+
+                    // Also update history locally in demo mode
+                    setHistory(h => {
+                        const last = h[h.length - 1];
+                        const now = new Date().toLocaleTimeString();
+                        if (!last || last.time !== now) {
+                            return [...h, { ...newReading, time: now }].slice(-20);
+                        }
+                        return h;
+                    });
+
+                    if (newPerc >= 100) {
+                        setMotorOn(false);
+                        clearInterval(simInterval);
+                    }
+                    return newReading;
+                });
+            }, 500);
+        }
+        return () => clearInterval(simInterval);
+    }, [motorOn, isDemoMode, isConnected]);
 
     const toggleMotor = () => {
         setMotorOn(!motorOn);
@@ -98,6 +156,12 @@ const Dashboard = () => {
     return (
         <div className="w-full flex flex-col gap-4">
             {/* Top Stats Row */}
+            {!isConnected && (
+                <div className="banner-warning">
+                    <AlertTriangle size={18} />
+                    <span>Backend Offline - The system is running in **Local Simulation Mode**. Your deployed Vercel site will now work even without a persistent backend!</span>
+                </div>
+            )}
             <div className="grid-layout" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', padding: 0 }}>
                 <StatsCard
                     title="Current Volume"
