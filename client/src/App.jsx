@@ -20,10 +20,6 @@ function App() {
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_10px_var(--success)]"></span>
-            <span className="text-sm font-medium">System Online</span>
-          </div>
           <button className="glass-panel px-4 py-2 text-sm font-medium hover:bg-white/5 transition-colors">
             Admin Login
           </button>

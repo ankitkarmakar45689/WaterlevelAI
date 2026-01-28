@@ -1,12 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import io from 'socket.io-client';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Activity, Droplets, Power, AlertTriangle, CheckCircle, RefreshCcw } from 'lucide-react';
+import { Activity, Droplets, Power, AlertTriangle, CheckCircle, RefreshCcw, Wifi, WifiOff } from 'lucide-react';
 import WaterTank from './WaterTank';
 
-// Connect to backend
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-const socket = io(API_URL);
+// Connect to backend logic
+const VITE_API_URL = import.meta.env.VITE_API_URL;
+const API_URL = VITE_API_URL || '';
 
 const StatsCard = ({ title, value, subtext, icon: Icon, color }) => (
     <div className="glass-panel p-4 flex flex-col justify-between" style={{ minHeight: '140px' }}>
@@ -29,96 +29,120 @@ const Dashboard = () => {
     const [motorOn, setMotorOn] = useState(false);
     const [isConnected, setIsConnected] = useState(false);
     const [isDemoMode, setIsDemoMode] = useState(false);
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
+
+    const socketRef = useRef(null);
     const TANK_CAPACITY = 1000; // Liters
 
+    // Initialize Connection & Mode
     useEffect(() => {
-        const onConnect = () => {
-            setIsConnected(true);
-            setIsDemoMode(false);
-        };
-        const onDisconnect = () => {
-            setIsConnected(false);
-            // If disconnected for more than 3 seconds, offer/switch to demo mode
-            setTimeout(() => {
-                if (!socket.connected) setIsDemoMode(true);
-            }, 3000);
-        };
+        const isLocal = window.location.hostname === 'localhost';
+        const hasApiUrl = !!VITE_API_URL;
 
-        socket.on('connect', onConnect);
-        socket.on('disconnect', onDisconnect);
-        if (socket.connected) setIsConnected(true);
+        // If we're on production and have no API URL, we MUST be in demo mode
+        if (!isLocal && !hasApiUrl) {
+            setIsDemoMode(true);
+        }
 
-        socket.on('new_reading', (reading) => {
-            setData(reading);
-            setIsDemoMode(false); // Real data received
-            setHistory(prev => {
-                const newHistory = [...prev, { ...reading, time: new Date(reading.timestamp).toLocaleTimeString() }];
-                return newHistory.slice(-20); // Keep last 20
+        if (API_URL) {
+            socketRef.current = io(API_URL, {
+                reconnectionAttempts: 3,
+                timeout: 5000,
+                autoConnect: true
             });
-        });
 
-        socket.on('motor_update', (state) => {
-            setMotorOn(state);
-        });
+            socketRef.current.on('connect', () => {
+                setIsConnected(true);
+                setIsDemoMode(false);
+                setIsInitialLoad(false);
+            });
 
-        socket.on('history_data', (hist) => {
-            if (hist.length === 0) {
-                setHistory([]);
-                setData({ level: 100, percentage: 0 });
-            } else {
-                const formatData = hist.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
-                setHistory(formatData);
-            }
-        });
+            socketRef.current.on('disconnect', () => {
+                setIsConnected(false);
+            });
 
-        fetch(`${API_URL}/api/history`)
-            .then(res => res.json())
-            .then(data => {
-                const formatData = data.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
-                setHistory(formatData);
-                if (formatData.length > 0) setData(formatData[formatData.length - 1]);
-            })
-            .catch(() => {
-                console.log("Backend offline, switching to demo mode simulation.");
+            socketRef.current.on('connect_error', () => {
+                setIsConnected(false);
+                setIsInitialLoad(false);
+                // If we can't connect, fallback to demo
                 setIsDemoMode(true);
             });
 
+            socketRef.current.on('new_reading', (reading) => {
+                setData(reading);
+                setIsDemoMode(false);
+                setHistory(prev => {
+                    const now = new Date(reading.timestamp).toLocaleTimeString();
+                    if (prev.length > 0 && prev[prev.length - 1].time === now) return prev;
+                    const newHistory = [...prev, { ...reading, time: now }];
+                    return newHistory.slice(-20);
+                });
+            });
+
+            socketRef.current.on('motor_update', (state) => {
+                setMotorOn(state);
+            });
+
+            socketRef.current.on('history_data', (hist) => {
+                if (hist && hist.length > 0) {
+                    const formatData = hist.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
+                    setHistory(formatData);
+                    setData(formatData[formatData.length - 1]);
+                }
+            });
+
+            // Initial fetch
+            fetch(`${API_URL}/api/history`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data && Array.isArray(data) && data.length > 0) {
+                        const formatData = data.map(d => ({ ...d, time: new Date(d.timestamp).toLocaleTimeString() }));
+                        setHistory(formatData);
+                        setData(formatData[formatData.length - 1]);
+                    }
+                })
+                .catch(err => {
+                    console.warn("API check failed, using simulation mode.");
+                    setIsDemoMode(true);
+                })
+                .finally(() => setIsInitialLoad(false));
+        } else {
+            setIsInitialLoad(false);
+            setIsDemoMode(true);
+        }
+
         return () => {
-            socket.off('connect', onConnect);
-            socket.off('disconnect', onDisconnect);
-            socket.off('new_reading');
-            socket.off('motor_update');
-            socket.off('history_data');
+            if (socketRef.current) socketRef.current.disconnect();
         };
     }, []);
 
-    // Frontend Simulation Fallback (for Vercel/Demo)
+    // Frontend Simulation Fallback
     useEffect(() => {
         let simInterval;
         if (motorOn && (isDemoMode || !isConnected)) {
             simInterval = setInterval(() => {
                 setData(prev => {
-                    const newPerc = Math.min(prev.percentage + 0.5, 100);
+                    if (prev.percentage >= 100) {
+                        setMotorOn(false);
+                        return prev;
+                    }
+
+                    const newPerc = Math.min(prev.percentage + 0.8, 100);
                     const newReading = {
-                        level: 100 - newPerc,
+                        level: parseFloat((100 * (1 - newPerc / 100)).toFixed(1)),
                         percentage: parseFloat(newPerc.toFixed(1)),
                         timestamp: new Date().toISOString()
                     };
 
-                    // Also update history locally in demo mode
                     setHistory(h => {
+                        const now = new Date(newReading.timestamp).toLocaleTimeString();
                         const last = h[h.length - 1];
-                        const now = new Date().toLocaleTimeString();
                         if (!last || last.time !== now) {
                             return [...h, { ...newReading, time: now }].slice(-20);
                         }
                         return h;
                     });
 
-                    if (newPerc >= 100) {
-                        setMotorOn(false);
-                        clearInterval(simInterval);
-                    }
                     return newReading;
                 });
             }, 500);
@@ -126,19 +150,26 @@ const Dashboard = () => {
         return () => clearInterval(simInterval);
     }, [motorOn, isDemoMode, isConnected]);
 
-    const toggleMotor = () => {
-        setMotorOn(!motorOn);
-        fetch(`${API_URL}/api/motor`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ state: !motorOn })
-        });
-    };
+    const toggleMotor = useCallback(() => {
+        const newState = !motorOn;
+        setMotorOn(newState);
+
+        if (!isDemoMode && isConnected && API_URL) {
+            fetch(`${API_URL}/api/motor`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ state: newState })
+            }).catch(err => console.error("Failed to update motor:", err));
+        }
+    }, [motorOn, isDemoMode, isConnected]);
 
     const resetSystem = () => {
-        fetch(`${API_URL}/api/reset`, { method: 'POST' });
+        if (!isDemoMode && isConnected && API_URL) {
+            fetch(`${API_URL}/api/reset`, { method: 'POST' });
+        }
         setHistory([]);
         setData({ percentage: 0, level: 100 });
+        setMotorOn(false);
     };
 
     const currentVolume = (data.percentage / 100) * TANK_CAPACITY;
@@ -153,15 +184,45 @@ const Dashboard = () => {
         statusText = 'Low Level';
     }
 
+    if (isInitialLoad) {
+        return (
+            <div className="flex items-center justify-center h-64">
+                <div className="text-xl animate-pulse">Initializing System...</div>
+            </div>
+        );
+    }
+
     return (
         <div className="w-full flex flex-col gap-4">
+            {/* Status Indicator Bar */}
+            <div className="flex justify-between items-center mb-2 px-1">
+                <div className="flex items-center gap-2">
+                    {isConnected ? (
+                        <div className="flex items-center gap-2 text-green-500 text-xs font-bold uppercase tracking-wider">
+                            <Wifi size={14} /> LIVE CONNECTED
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-2 text-amber-500 text-xs font-bold uppercase tracking-wider">
+                            <WifiOff size={14} /> SIMULATION MODE
+                        </div>
+                    )}
+                </div>
+                <div className="text-[10px] text-slate-500 font-mono">
+                    {isConnected ? `BASE_URL: ${API_URL}` : 'STANDALONE PRODUCTION BUILD'}
+                </div>
+            </div>
+
             {/* Top Stats Row */}
-            {!isConnected && (
+            {!isConnected && !isInitialLoad && (
                 <div className="banner-warning">
                     <AlertTriangle size={18} />
-                    <span>Backend Offline - The system is running in **Local Simulation Mode**. Your deployed Vercel site will now work even without a persistent backend!</span>
+                    <span>
+                        <strong>Backend Offline:</strong> The system has automatically switched to <strong>Local Simulation Mode</strong>.
+                        Your water level will rise when you start the motor, even without a server connection.
+                    </span>
                 </div>
             )}
+
             <div className="grid-layout" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', padding: 0 }}>
                 <StatsCard
                     title="Current Volume"
@@ -206,13 +267,16 @@ const Dashboard = () => {
             </div>
 
             {/* Main Content Area */}
-            <div className="grid-responsive">
+            <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1rem' }}>
                 {/* Left: Visual Tank */}
                 <WaterTank percentage={data.percentage} level={data.level} capacity={TANK_CAPACITY} />
 
                 {/* Right: Chart */}
                 <div className="glass-panel p-6 flex flex-col" style={{ minHeight: '400px' }}>
-                    <h3 className="text-xl font-bold mb-4">Water Level History</h3>
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-xl font-bold">Water Level History</h3>
+                        {isDemoMode && <span className="text-[10px] bg-white/10 px-2 py-1 rounded">SIMULATED DATA</span>}
+                    </div>
                     <div style={{ flex: 1, minHeight: '300px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={history}>
@@ -222,13 +286,13 @@ const Dashboard = () => {
                                         <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
                                     </linearGradient>
                                 </defs>
-                                <XAxis dataKey="time" stroke="var(--text-secondary)" fontSize={12} tickCount={5} />
-                                <YAxis stroke="var(--text-secondary)" fontSize={12} domain={[0, 100]} />
+                                <XAxis dataKey="time" stroke="var(--text-secondary)" fontSize={10} tickCount={5} />
+                                <YAxis stroke="var(--text-secondary)" fontSize={10} domain={[0, 100]} />
                                 <Tooltip
                                     contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--card-border)', color: '#fff' }}
                                     itemStyle={{ color: 'var(--accent)' }}
                                 />
-                                <Area type="monotone" dataKey="percentage" stroke="var(--accent)" fillOpacity={1} fill="url(#colorLevel)" />
+                                <Area isAnimationActive={!isDemoMode} type="monotone" dataKey="percentage" stroke="var(--accent)" fillOpacity={1} fill="url(#colorLevel)" />
                             </AreaChart>
                         </ResponsiveContainer>
                     </div>
