@@ -202,23 +202,33 @@ const Dashboard = () => {
                             <Wifi size={14} /> LIVE CONNECTED
                         </div>
                     ) : (
-                        <div className="flex items-center gap-2 text-amber-500 text-xs font-bold uppercase tracking-wider">
-                            <WifiOff size={14} /> SIMULATION MODE
+                        <div className="flex items-center gap-2 text-blue-400 text-xs font-bold uppercase tracking-wider">
+                            <Activity size={14} /> PREVIEW MODE
                         </div>
                     )}
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono">
-                    {isConnected ? `BASE_URL: ${API_URL}` : 'STANDALONE PRODUCTION BUILD'}
+                    {isConnected ? `BASE_URL: ${API_URL}` : 'STANDALONE DEMO'}
                 </div>
             </div>
 
             {/* Top Stats Row */}
-            {!isConnected && !isInitialLoad && (
+            {!isConnected && !isInitialLoad && !VITE_API_URL && (
+                <div className="banner-warning" style={{ background: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8' }}>
+                    <Activity size={18} />
+                    <span>
+                        <strong>Welcome to AquaSense Preview:</strong> You are viewing the standalone dashboard.
+                        To connect to real hardware, please configure your <code>VITE_API_URL</code> in Vercel.
+                    </span>
+                </div>
+            )}
+
+            {!isConnected && !isInitialLoad && VITE_API_URL && (
                 <div className="banner-warning">
                     <AlertTriangle size={18} />
                     <span>
-                        <strong>Backend Offline:</strong> The system has automatically switched to <strong>Local Simulation Mode</strong>.
-                        Your water level will rise when you start the motor, even without a server connection.
+                        <strong>Connection Lost:</strong> Unable to reach the backend at <code>{API_URL}</code>.
+                        Switching to local simulation...
                     </span>
                 </div>
             )}
